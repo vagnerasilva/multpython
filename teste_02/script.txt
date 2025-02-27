@@ -1,0 +1,7 @@
+
+3.8.18 3.9.5 3.12.2
+pyenv exec python3.8.18 test.py
+
+pyenv exec python3.9.5 test.py
+
+pyenv exec python3.12.2 test.py
