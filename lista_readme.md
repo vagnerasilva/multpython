@@ -61,3 +61,4 @@ def lambda_handler(event, context):
     ssm.get_parameter(Name='arn:aws:ssm:{region}:{account}:parameter/your-app/dev/appSettings '
 
 https://aws.amazon.com/pt/blogs/mt/introducing-parameter-store-cross-account-sharing/
+https://stackoverflow.com/questions/64373503/cross-account-access-to-ssm-parameters
