@@ -43,4 +43,21 @@ if my_list:
 
 For storing potentially larger lists, consider using the advanced-parameter tier for increased capacity, as standard parameters have a 4KB size limit. 
 
-    
+https://aws.amazon.com/pt/blogs/mt/introducing-parameter-store-cross-account-sharing/
+import json
+import boto3
+
+def lambda_handler(event, context):
+
+    ssm = boto3.client('ssm')
+    parameter = ssm.get_parameter(Name='arn:aws:ssm:[REGION]:[YOUR-ACCOUNT]:parameter/your-app/dev/appSettings')
+    ssm_val = parameter['Parameter']['Value']
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('SSM Param value in this account: ' + ssm_val)
+    }
+
+    ssm.get_parameter(Name='arn:aws:ssm:{region}:{account}:parameter/your-app/dev/appSettings '
+
+https://aws.amazon.com/pt/blogs/mt/introducing-parameter-store-cross-account-sharing/
