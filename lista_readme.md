@@ -62,3 +62,44 @@ def lambda_handler(event, context):
 
 https://aws.amazon.com/pt/blogs/mt/introducing-parameter-store-cross-account-sharing/
 https://stackoverflow.com/questions/64373503/cross-account-access-to-ssm-parameters
+
+
+FEATURE STORE
+Geral -https://www.featurestore.org/
+
+
+Conceitos:
+
+aws- https://docs.aws.amazon.com/pt_br/sagemaker/latest/dg/feature-store-concepts.html
+
+tecton- https://www.tecton.ai/blog/what-is-a-feature-store/
+
+hosworks - https://www.hopsworks.ai/dictionary/feature-store
+
+phdata - https://www.phdata.io/blog/what-is-a-feature-store/
+
+Neptune- https://neptune.ai/blog/feature-stores-components-of-a-data-science-factory-guide
+
+databrics - https://docs.databricks.com/gcp/en/machine-learning/feature-store/
+
+
+
+
+Topicos e conceitos feature store
+
+Blog  https://medium.com/data-for-ai
+
+
+Livros e pdfs
+
+https://github.com/PacktPublishing/Feature-Store-for-Machine-Learning
+
+
+https://resources.tecton.ai/hubfs/Build%20vs.%20Buy-%20A%20Feature%20Store%20for%20Real-Time%20Machine%20Learning.pdf
+
+repo: https://github.com/featurestorebook/mlfs-book/blob/main/README.md
+
+
+
+Artigos:
+https://arxiv.org/pdf/2108.05053
