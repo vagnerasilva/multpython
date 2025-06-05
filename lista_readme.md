@@ -103,3 +103,9 @@ repo: https://github.com/featurestorebook/mlfs-book/blob/main/README.md
 
 Artigos:
 https://arxiv.org/pdf/2108.05053
+
+https://docs.google.com/document/d/1MJdBSuDvrPotUiIU7umYEh_KX0tcu4yu06Yq0u2Ox9s/edit?usp=sharing
+https://drive.google.com/drive/folders/1AIheS7N4CKMYQNkzm9_o55b_fZsb3UYd?usp=drive_link
+
+
+
