@@ -118,3 +118,109 @@ O arquivo `/home/sagemaker-user/audit_network.log` terá este padrão:
 2024-05-10 15:05:00 | USER: joao@empresa.com | PROFILE: prf-01 | CROSS_ACCOUNT_CONN | DST_IP: 10.50.5.11 | PORT: 5432
 ```
 ---
+# SageMaker Studio Network Auditor (v2 - Connection Timing)
+
+Este script monitora o início e o fim de conexões TCP, calculando a duração total e registrando no log de auditoria.
+
+---
+
+## 🛠️ Arquivo: network_monitor.py
+
+```python
+import subprocess
+import re
+import datetime
+import os
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+# --- CONFIGURAÇÕES ---
+LOG_FILE = "/home/sagemaker-user/audit_network.log"
+ENV_FILE = "/home/sagemaker-user/.local/governance.env"
+MY_VPC_CIDR = r"^(10\.0\.)"            
+CROSS_ACCOUNT_NETWORKS = r"^(10\.50\.|192\.168\.)"
+
+# Dicionário para rastrear conexões ativas: {(src_ip, src_port, dst_ip, dst_port): start_time}
+active_connections = {}
+
+# --- CONFIGURAÇÃO DE ROTAÇÃO (90 DIAS) ---
+handler = TimedRotatingFileHandler(LOG_FILE, when="D", interval=1, backupCount=90)
+logger = logging.getLogger("AuditLogger")
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
+
+def get_user_info():
+    info = {"email": "unknown", "profile": "unknown"}
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r") as e:
+                content = e.read()
+                email = re.search(r"EMAIL=(.*)", content)
+                profile = re.search(r"USER_PROFILE=(.*)", content)
+                if email: info["email"] = email.group(1).strip().replace('"', '')
+                if profile: info["profile"] = profile.group(1).strip().replace('"', '')
+        except Exception: pass
+    return info
+
+user = get_user_info()
+user_tag = f"USER: {user['email']} | PROFILE: {user['profile']}"
+
+# tcpdump captura: DNS (53), SYN (Início), FIN/RST (Fim)
+cmd = ["sudo", "tcpdump", "-i", "any", "-n", "-l", "port 53 or (tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)"]
+
+process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+for line in iter(process.stdout.readline, ""):
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 1. PROCESSAMENTO DE DNS
+    if "A?" in line:
+        match = re.search(r"A\? ([\w\.\-]+)", line)
+        if match:
+            domain = match.group(1)
+            tag = "AWS_API_CALL" if "amazonaws.com" in domain else "EXTERNAL_DOMAIN"
+            logger.info(f"{timestamp} | {user_tag} | {tag} | DOMAIN: {domain}")
+    
+    # 2. PROCESSAMENTO DE TCP (START / END)
+    elif "Flags [" in line:
+        # Extrai IPs e Portas: IP 10.0.1.5.12345 > 1.2.3.4.443
+        match = re.search(r"IP ([\d\.]+)\.(\d+) > ([\d\.]+)\.(\d+): Flags \[([SFP\.]+)\]", line)
+        if match:
+            src_ip, src_port, dst_ip, dst_port, flag = match.groups()
+            conn_key = (src_ip, src_port, dst_ip, dst_port)
+
+            # FILTRO: Ignorar tráfego interno da VPC
+            if re.match(MY_VPC_CIDR, dst_ip) and not re.match(CROSS_ACCOUNT_NETWORKS, dst_ip):
+                continue
+
+            # INÍCIO DA CONEXÃO (Flag [S] = SYN)
+            if "S" in flag:
+                active_connections[conn_key] = now
+                event = "CROSS_ACCOUNT_CONN" if re.match(CROSS_ACCOUNT_NETWORKS, dst_ip) else "EXTERNAL_CONN"
+                logger.info(f"{timestamp} | {user_tag} | {event}_START | DST_IP: {dst_ip} | PORT: {dst_port}")
+
+            # FIM DA CONEXÃO (Flag [F] = FIN ou [R] = RST)
+            elif any(f in flag for f in ["F", "R"]):
+                if conn_key in active_connections:
+                    start_time = active_connections.pop(conn_key)
+                    duration = (now - start_time).total_seconds()
+                    event = "CROSS_ACCOUNT_CONN" if re.match(CROSS_ACCOUNT_NETWORKS, dst_ip) else "EXTERNAL_CONN"
+                    logger.info(f"{timestamp} | {user_tag} | {event}_END | DST_IP: {dst_ip} | DURATION: {duration}s")
+```
+
+---
+
+## 📈 Exemplo de Log com Tempo de Conexão
+```text
+2024-05-10 15:00:01 | USER: joao@... | PROFILE: prf-01 | EXTERNAL_DOMAIN | DOMAIN: ://openai.com
+2024-05-10 15:00:02 | USER: joao@... | PROFILE: prf-01 | EXTERNAL_CONN_START | DST_IP: 104.18.7.192 | PORT: 443
+2024-05-10 15:00:15 | USER: joao@... | PROFILE: prf-01 | EXTERNAL_CONN_END | DST_IP: 104.18.7.192 | DURATION: 13.5s
+```
+
+### Notas sobre esta versão:
+1.  **Chave de Conexão:** Usamos o par IP/Porta de origem e destino para garantir que o tempo de fim corresponda exatamente ao início daquela sessão específica.
+2.  **Duração:** O tempo é calculado em segundos. Se a conexão durar menos de 1 segundo, aparecerá como `0.x s`.
+3.  **Memória:** O dicionário `active_connections` limpa as entradas automaticamente ao detectar o fim da conexão para não consumir memória desnecessária.
+
+Deseja que eu adicione algum **limite de tempo (timeout)** para limpar conexões que nunca enviam o pacote de fim (ex: conexões "zumbis")?
