@@ -224,3 +224,112 @@ for line in iter(process.stdout.readline, ""):
 3.  **Memória:** O dicionário `active_connections` limpa as entradas automaticamente ao detectar o fim da conexão para não consumir memória desnecessária.
 
 Deseja que eu adicione algum **limite de tempo (timeout)** para limpar conexões que nunca enviam o pacote de fim (ex: conexões "zumbis")?
+
+# SageMaker Studio Network Auditor (v3 - Domain Link & Timing)
+
+Este script monitora o ciclo de vida completo: Resolve o DNS, inicia a conexão e, no fim, reporta a duração vinculada ao domínio original.
+
+---
+
+## 🛠️ Arquivo: network_monitor.py
+
+```python
+import subprocess
+import re
+import datetime
+import os
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+# --- CONFIGURAÇÕES ---
+LOG_FILE = "/home/sagemaker-user/audit_network.log"
+ENV_FILE = "/home/sagemaker-user/.local/governance.env"
+MY_VPC_CIDR = r"^(10\.0\.)"            
+CROSS_ACCOUNT_NETWORKS = r"^(10\.50\.|192\.168\.)"
+
+# Rastreio de Conexões e DNS
+# active_conns: {(src_port, dst_ip, dst_port): {"start": time, "domain": str}}
+active_conns = {}
+dns_cache = {} # Mapeia IP -> Domínio (para saber quem é o IP no fim da conexão)
+
+# --- CONFIGURAÇÃO DE ROTAÇÃO (90 DIAS) ---
+handler = TimedRotatingFileHandler(LOG_FILE, when="D", interval=1, backupCount=90)
+logger = logging.getLogger("AuditLogger")
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
+
+def get_user_info():
+    info = {"email": "unknown", "profile": "unknown"}
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r") as e:
+                content = e.read()
+                email = re.search(r"EMAIL=(.*)", content)
+                profile = re.search(r"USER_PROFILE=(.*)", content)
+                if email: info["email"] = email.group(1).strip().replace('"', '')
+                if profile: info["profile"] = profile.group(1).strip().replace('"', '')
+        except Exception: pass
+    return info
+
+user = get_user_info()
+u_tag = f"USER: {user['email']} | PROFILE: {user['profile']}"
+
+# Captura DNS (53), SYN, FIN e RST
+cmd = ["sudo", "tcpdump", "-i", "any", "-n", "-l", "port 53 or (tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)"]
+
+process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+for line in iter(process.stdout.readline, ""):
+    now = datetime.datetime.now()
+    ts = now.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 1. CAPTURA DNS E MAPEIA IP
+    if " A? " in line or " A " in line:
+        # Tenta capturar a resposta DNS (IP que o domínio resolveu)
+        dns_match = re.search(r"A\? ([\w\.\-]+)", line)
+        ip_match = re.search(r"A ([\d\.]+)$", line.strip())
+        
+        if dns_match:
+            current_query = dns_match.group(1)
+        if ip_match and 'current_query' in locals():
+            dns_cache[ip_match.group(1)] = current_query
+
+    # 2. PROCESSAMENTO TCP (START/END)
+    elif "Flags [" in line:
+        m = re.search(r"IP ([\d\.]+)\.(\d+) > ([\d\.]+)\.(\d+): Flags \[([SFP\.]+)\]", line)
+        if m:
+            src_ip, src_p, dst_ip, dst_p, flag = m.groups()
+            conn_key = (src_p, dst_ip, dst_p) # Porta origem + Destino identifica a sessão
+            domain = dns_cache.get(dst_ip, "unknown-domain")
+
+            if re.match(MY_VPC_CIDR, dst_ip) and not re.match(CROSS_ACCOUNT_NETWORKS, dst_ip):
+                continue
+
+            # START
+            if "S" in flag:
+                active_conns[conn_key] = {"start": now, "domain": domain}
+                logger.info(f"{ts} | {u_tag} | START | DOMAIN: {domain} | DST: {dst_ip}:{dst_p}")
+
+            # END
+            elif any(f in flag for f in ["F", "R"]):
+                if conn_key in active_conns:
+                    c = active_conns.pop(conn_key)
+                    dur = (now - c["start"]).total_seconds()
+                    logger.info(f"{ts} | {u_tag} | END   | DOMAIN: {c['domain']} | DST: {dst_ip}:{dst_p} | DURATION: {dur}s")
+```
+
+---
+
+### Como ler o novo log:
+```text
+2024-05-10 15:00:01 | USER: joao@... | START | DOMAIN: api.openai.com | DST: 104.18.7.192:443
+2024-05-10 15:00:15 | USER: joao@... | END   | DOMAIN: api.openai.com | DST: 104.18.7.192:443 | DURATION: 14.2s
+```
+
+### O que mudou:
+1.  **Vínculo Inteligente:** O script observa a resposta do DNS e guarda que o IP `104.18.7.192` pertence à `openai.com`.
+2.  **Consolidação:** Você não tem mais uma linha solta de DNS e outra de IP. O log de `START` e `END` já traz o domínio amarrado à conexão.
+3.  **Precisão:** Se o usuário baixar um dataset gigante do Kaggle, o log de `END` só aparecerá quando o download terminar, mostrando a duração total (ex: `DURATION: 320.5s`).
+
+Deseja que eu adicione uma **limpeza periódica** no cache de domínios para evitar que ele cresça muito se o usuário ficar dias com o ambiente ligado?
+
